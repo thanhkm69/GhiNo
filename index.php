@@ -31,6 +31,7 @@ if ($keyword !== "") {
       <h2 class="mb-0">
         <i class="bi bi-journal-text"></i> Sổ ghi nợ
       </h2>
+      <a class="btn btn-danger" href="stats.php">Xem thống kê</a>
       <div class="d-flex gap-2">
         <!-- Form tìm kiếm -->
         <form method="get" class="d-flex" role="search">

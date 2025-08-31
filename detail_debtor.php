@@ -17,32 +17,77 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                 paid_at = CASE WHEN status = 1 THEN NOW() ELSE NULL END
             WHERE debtorID = ? AND checkbox = 1
         ", [$debtorID]);
-    } elseif (isset($_POST["debtID"])) {
-        // Chỉ cập nhật từng checkbox
+    } elseif (isset($_POST["debtID"]) && isset($_POST["status"])) {
+        // ✅ Cập nhật trực tiếp trạng thái từ select
         $debtID = intval($_POST["debtID"]);
-        $checkbox = isset($_POST["checkbox"]) ? 1 : 0;
-        $db->execute("UPDATE debts SET checkbox = ? WHERE debtID = ?", [$checkbox, $debtID]);
+        $status = intval($_POST["status"]);
+
+        if ($status == 1) {
+            $db->execute("UPDATE debts SET status = 1, paid_at = NOW() WHERE debtID = ?", [$debtID]);
+        } else {
+            $db->execute("UPDATE debts SET status = 0, paid_at = NULL WHERE debtID = ?", [$debtID]);
+        }
     } elseif (isset($_POST["toggleAll"])) {
-        // Nếu checkbox "chọn tất cả" được tick => set tất cả = 1, ngược lại = 0
+        // ✅ Chọn tất cả
         $allChecked = isset($_POST["checkbox"]) ? 1 : 0;
         $db->execute("UPDATE debts SET checkbox = ? WHERE debtorID = ?", [$allChecked, $debtorID]);
+    } elseif (isset($_POST["debtID"]) && isset($_POST["checkbox"])) {
+        // ✅ Tick từng ô checkbox riêng lẻ
+        $debtID = intval($_POST["debtID"]);
+        $checked = ($_POST["checkbox"] == 1) ? 1 : 0;
+        $db->execute("UPDATE debts SET checkbox = ? WHERE debtID = ?", [$checked, $debtID]);
+    } elseif (isset($_POST["deleteDebt"])) {
+        // ✅ Xóa nợ
+        $debtID = intval($_POST["deleteDebt"]);
+        $db->execute("DELETE FROM debts WHERE debtID = ? AND debtorID = ?", [$debtID, $debtorID]);
     }
 
-    header("Location: detail_debtor.php?id=" . $debtorID);
+    // ✅ Giữ lại statusFilter khi redirect
+    $statusFilter = isset($_GET["statusFilter"]) ? "&statusFilter=" . intval($_GET["statusFilter"]) : "";
+    header("Location: detail_debtor.php?id=" . $debtorID . $statusFilter);
     exit;
 }
 
 
-$debts = $db->getAll("SELECT * FROM debts WHERE debtorID = ? ORDER BY debtID DESC", [$debtorID]);
 
-$totals = $db->getOne("
-    SELECT 
-        SUM(CASE WHEN status = 0 THEN amount ELSE 0 END) as total_unpaid,
-        SUM(CASE WHEN status = 1 THEN amount ELSE 0 END) as total_paid,
-        SUM(amount) as total_all
-    FROM debts
-    WHERE debtorID = ? AND checkbox = 1
-", [$debtorID]);
+$statusFilter = isset($_GET['statusFilter']) && $_GET['statusFilter'] !== ''
+    ? intval($_GET['statusFilter'])
+    : null;
+
+if ($statusFilter !== null) {
+    // Lấy danh sách nợ theo status filter
+    $debts = $db->getAll(
+        "SELECT * FROM debts WHERE debtorID = ? AND status = ? ORDER BY debtID DESC",
+        [$debtorID, $statusFilter]
+    );
+
+    // ✅ Tính tổng theo status filter
+    $totals = $db->getOne("
+        SELECT 
+            SUM(CASE WHEN status = 0 THEN amount ELSE 0 END) as total_unpaid,
+            SUM(CASE WHEN status = 1 THEN amount ELSE 0 END) as total_paid,
+            SUM(amount) as total_all
+        FROM debts
+        WHERE debtorID = ? AND status = ? AND checkbox = 1
+    ", [$debtorID, $statusFilter]);
+} else {
+    // Lấy tất cả nếu không lọc
+    $debts = $db->getAll(
+        "SELECT * FROM debts WHERE debtorID = ? ORDER BY debtID DESC",
+        [$debtorID]
+    );
+
+    // ✅ Tính tổng không giới hạn status
+    $totals = $db->getOne("
+        SELECT 
+            SUM(CASE WHEN status = 0 THEN amount ELSE 0 END) as total_unpaid,
+            SUM(CASE WHEN status = 1 THEN amount ELSE 0 END) as total_paid,
+            SUM(amount) as total_all
+        FROM debts
+        WHERE debtorID = ? AND checkbox = 1
+    ", [$debtorID]);
+}
+
 
 ?>
 
@@ -92,6 +137,26 @@ $totals = $db->getOne("
             </div>
         </form>
 
+        <!-- Form lọc trạng thái -->
+        <form method="get" class="mb-3 d-flex align-items-center">
+            <input type="hidden" name="id" value="<?= $debtorID ?>">
+            <label for="statusFilter" class="me-2 fw-bold">Lọc trạng thái:</label>
+            <select name="statusFilter" id="statusFilter" class="form-select w-auto me-2"
+                onchange="this.form.submit()">
+                <option value="">Tất cả</option>
+                <option value="0" <?= (isset($_GET['statusFilter']) && $_GET['statusFilter'] === '0') ? 'selected' : '' ?>>
+                    ❌ Chưa trả
+                </option>
+                <option value="1" <?= (isset($_GET['statusFilter']) && $_GET['statusFilter'] === '1') ? 'selected' : '' ?>>
+                    ✅ Đã trả
+                </option>
+            </select>
+
+            <!-- Nút xóa lọc -->
+            <a href="detail_debtor.php?id=<?= $debtorID ?>" class="btn btn-secondary">
+                Xóa lọc
+            </a>
+        </form>
 
         <div class="card shadow-sm">
             <div class="card-body table-responsive">
@@ -114,6 +179,7 @@ $totals = $db->getOne("
                             <th><i class="bi bi-flag-fill"></i> Trạng thái</th>
                             <th><i class="bi bi-calendar-event"></i> Ngày nợ</th>
                             <th><i class="bi bi-calendar-check"></i> Ngày trả</th>
+                            <th><i class="bi bi-gear"></i> Hành động</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -123,6 +189,8 @@ $totals = $db->getOne("
                                     <td class="text-center">
                                         <form method="post" action="" class="d-inline debt-form">
                                             <input type="hidden" name="debtID" value="<?= $d['debtID'] ?>">
+                                            <!-- hidden luôn gửi 0 -->
+                                            <input type="hidden" name="checkbox" value="0">
                                             <input type="checkbox"
                                                 class="debt-checkbox"
                                                 name="checkbox"
@@ -130,18 +198,38 @@ $totals = $db->getOne("
                                                 onchange="this.form.submit()"
                                                 <?= $d['checkbox'] == 1 ? 'checked' : '' ?>>
                                         </form>
+
                                     </td>
                                     <td><?= htmlspecialchars($d['description']) ?></td>
                                     <td><?= number_format($d['amount'], 0, ',', '.') ?> đ</td>
                                     <td>
-                                        <?php if ($d['status'] == 1) : ?>
-                                            <span class="badge bg-success">Đã trả</span>
-                                        <?php else : ?>
-                                            <span class="badge bg-danger">Chưa trả</span>
-                                        <?php endif; ?>
+                                        <form method="post" action="" class="d-inline">
+                                            <input type="hidden" name="debtID" value="<?= $d['debtID'] ?>">
+                                            <select name="status" class="form-select form-select-sm fw-bold"
+                                                onchange="this.form.submit()">
+                                                <option value="0" <?= $d['status'] == 0 ? 'selected' : '' ?>>
+                                                    ❌ Chưa trả
+                                                </option>
+                                                <option value="1" <?= $d['status'] == 1 ? 'selected' : '' ?>>
+                                                    ✅ Đã trả
+                                                </option>
+                                            </select>
+                                        </form>
                                     </td>
                                     <td><?= date("d-m-Y", strtotime($d['created_at'])) ?></td>
-                                    <td><?= $d['paid_at'] ?: '-' ?></td>
+                                    <td><?= $d['paid_at'] != NULL ? date("d-m-Y", strtotime($d['paid_at'])) : '-' ?></td>
+                                    <td>
+                                        <a href="edit_debt.php?id=<?= $d['debtID'] ?>" class="btn btn-sm btn-warning"> Sửa
+                                            <i class="bi bi-pencil"></i>
+                                        </a>
+                                        <form method="post" action="" class="d-inline"
+                                            onsubmit="return confirm('Bạn có chắc muốn xóa khoản nợ này?');">
+                                            <input type="hidden" name="deleteDebt" value="<?= $d['debtID'] ?>">
+                                            <button type="submit" class="btn btn-sm btn-danger">Xóa
+                                                <i class="bi bi-trash"></i>
+                                            </button>
+                                        </form>
+                                    </td>
                                 </tr>
                             <?php endforeach; ?>
 
